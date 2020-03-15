@@ -416,8 +416,34 @@ class NagatoStream:
                 = await asyncio.open_connection(host, port)
             self.host, self.port = host, port
         except OSError:
-            self.proxy_writer.write(PROXY_RESP_504.format(version).encode())
-            self.proxy_writer.close()
+            # fix redirection error: http://example.comhttps/example.com/foo/...
+            netloc = url.netloc.rsplit('https', maxsplit=1)
+            path = url.path.split('/', maxsplit=2)
+
+            if len(netloc) != 2 or netloc[1] or len(path) < 2 \
+                    or path[1] not in netloc[0]:
+                self.proxy_writer.write(PROXY_RESP_504.format(version).encode())
+                self.proxy_writer.close()
+            else:
+                # fix netloc, path
+                netloc = netloc[0]
+                path = '/' + '/'.join(path[2:])
+                # noinspection PyProtectedMember
+                fixed_url = url._replace(netloc=netloc, path=path).geturl()
+
+                try:
+                    host, port = netloc.rsplit(':', 1)
+                    port = int(port)
+                except ValueError:
+                    host = netloc
+                    port = 80
+                _logger.info('{} -> 307 Temporary Redirect {}'.format(
+                    url.geturl(), fixed_url))
+                host_abs_url['{}:{}'.format(host, port)] = False
+
+                self.proxy_writer.write(PROXY_RESP_307.format(
+                    version, fixed_url).encode())
+                self.proxy_writer.close()
             return
 
         reader = self.handle_requests((method, url, version))
