@@ -11,8 +11,6 @@ __version__ = '0.6.0'
 
 _logger = logging.getLogger(__name__)
 
-_loop = asyncio.get_event_loop()
-
 PROXY_RESP_504 = '{} 504 Gateway Timeout\r\n' \
     + 'Proxy-Agent: Nagato/{}\r\n'.format(__version__) \
     + 'Connection: close\r\n\r\n'
@@ -223,7 +221,7 @@ class NagatoStream:
         # open a tunneling connection
         try:
             server_reader, server_writer \
-                = await asyncio.open_connection(host, port, loop=_loop)
+                = await asyncio.open_connection(host, port)
         except OSError:
             self.proxy_writer.write(PROXY_RESP_504.format(version).encode())
             self.proxy_writer.close()
@@ -249,7 +247,7 @@ class NagatoStream:
                                lambda: self.proxy_writer.close())
         writer = tunnel_stream(server_reader, self.proxy_writer,
                                lambda: server_writer.close())
-        await asyncio.wait([reader, writer], loop=_loop)
+        await asyncio.wait([reader, writer])
 
     async def handle_request(self, req_line):
         """:type req_line: (str, urllib.parse.ParseResult, str)"""
@@ -312,7 +310,7 @@ class NagatoStream:
             for p in [host_line[:2], *random_split(host_line[2:], 6)]:
                 self.server_writer.write(p)
                 await self.server_writer.drain()
-                await asyncio.sleep(random.randrange(10) / 1000.0, loop=_loop)
+                await asyncio.sleep(random.randrange(10) / 1000.0)
         # finish handling the header
         self.server_writer.write(b'\r\n')
 
@@ -415,10 +413,15 @@ class NagatoStream:
             await self.handle_tunnel(host, port, version)
             return
 
+        url = urlparse(url)
+        host, port = url.hostname, url.port
+        if port is None:
+            port = 80
+
         # start relaying
         try:
             self.server_reader, self.server_writer \
-                = await asyncio.open_connection(host, port, loop=_loop)
+                = await asyncio.open_connection(host, port)
             self.host, self.port = host, port
         except OSError:
             self.proxy_writer.write(PROXY_RESP_504.format(version).encode())
@@ -427,7 +430,7 @@ class NagatoStream:
 
         reader = self.handle_requests(req_line)
         writer = self.handle_responses()
-        await asyncio.wait([reader, writer], loop=_loop)
+        await asyncio.wait([reader, writer])
 
 
 async def nagato_stream(reader, writer):
@@ -440,6 +443,15 @@ async def nagato_stream(reader, writer):
         if streams.server_writer is not None:
             streams.server_writer.close()
         streams.proxy_writer.close()
+
+
+async def run_server(args):
+    s = await asyncio.start_server(nagato_stream, args.host, args.port)
+    async with s:
+        try:
+            await s.serve_forever()
+        except KeyboardInterrupt:
+            pass
 
 
 def main():
@@ -458,15 +470,4 @@ def main():
     _logger.info('Nagato {} Starting on {}:{}'.format(
         __version__, args.host, args.port))
 
-    # noinspection PyTypeChecker
-    coro = asyncio.start_server(nagato_stream, args.host, args.port, loop=_loop)
-    server = _loop.run_until_complete(coro)
-
-    try:
-        _loop.run_forever()
-    except KeyboardInterrupt:
-        pass
-
-    server.close()
-    _loop.run_until_complete(server.wait_closed())
-    _loop.close()
+    asyncio.run(run_server(args))
