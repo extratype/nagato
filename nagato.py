@@ -93,8 +93,7 @@ class HttpStream:
 
     async def request_line(self, tunnel=False):
         """
-        Return tuple ``method, url, version`` of type
-        ``str, urllib.parse.ParseResult, str``.
+        Return tuple ``method, url, version``.
         """
         req_line = await self.nextline()
         if tunnel:
@@ -104,7 +103,7 @@ class HttpStream:
         version = version.rstrip('\r\n')
 
         _logger.info('{} {} {}'.format(method, url, version))
-        return method, urlparse(url), version
+        return method, url, version
 
     async def status_line(self, tunnel=False):
         """
@@ -389,20 +388,13 @@ class NagatoStream:
         # connect to the server
         http = HttpStream(self.proxy_reader)
         req_line = await http.request_line()
-        """:type: (str, urllib.parse.ParseResult, str)"""
+        """:type: (str, str, str)"""
         method, url, version = req_line
-
-        try:
-            host, port = url.netloc.rsplit(':', 1)
-            port = int(port)
-        except ValueError:
-            host = url.netloc
-            port = 80
 
         if method == 'CONNECT':
             # handle the tunneling request
-            host, port = url.path.rsplit(':', 1)
-            port = int(port)
+            url = urlparse('//' + url)
+            host, port = url.hostname, url.port
 
             # drop the rest, assuming no body
             while True:
@@ -428,7 +420,7 @@ class NagatoStream:
             self.proxy_writer.close()
             return
 
-        reader = self.handle_requests(req_line)
+        reader = self.handle_requests((method, url, version))
         writer = self.handle_responses()
         await asyncio.wait([reader, writer])
 
